@@ -177,6 +177,12 @@
           }
         });
 
+        socket.on("waiting-for-partner", (isWaiting) => {
+        if (isWaiting) {
+          displayMessage("Waiting for a partner...");
+        }
+      });
+
         socket.on("room-full", () => {
           const msgElement = document.createElement("div");
           msgElement.textContent = "Room is full, please try again later.";
