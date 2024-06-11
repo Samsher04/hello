@@ -1,129 +1,71 @@
-const socket = io();
+const socket = io('http://localhost:3000');
+let myPeer;
+let myStream;
+let userStream;
+const myVideo = document.getElementById('my-video');
+const userVideo = document.getElementById('user-video');
+const chatBox = document.getElementById('chat-box');
+const chatInput = document.getElementById('chat-input');
+const sendButton = document.getElementById('send-button');
+const nextButton = document.getElementById('next-button');
 
-const chat = document.getElementById('chat');
-const messageInput = document.getElementById('message');
-const sendButton = document.getElementById('send');
-const nextButton = document.getElementById('next');
-const loader = document.getElementById('loader');
-const localVideo = document.getElementById('localVideo');
-const remoteVideo = document.getElementById('remoteVideo');
+async function init() {
+  myStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  myVideo.srcObject = myStream;
+  myPeer = new SimplePeer({
+    initiator: true,
+    stream: myStream,
+    trickle: false
+  });
 
-let localStream;
-let remoteStream = new MediaStream();
-let peerConnection;
+  myPeer.on('signal', data => {
+    socket.emit('send-signal', roomId, data);
+  });
 
-const config = {
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
-    ]
-};
+  myPeer.on('stream', stream => {
+    userVideo.srcObject = stream;
+  });
 
-async function startVideo() {
-    try {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localVideo.srcObject = localStream;
-        socket.emit('next');
-    } catch (error) {
-        console.error('Error accessing media devices.', error);
-    }
+  socket.on('receive-signal', signal => {
+    myPeer.signal(signal);
+  });
+
+  socket.on('user-connected', userId => {
+    myPeer = new SimplePeer({
+      initiator: false,
+      stream: myStream,
+      trickle: false
+    });
+
+    myPeer.on('signal', data => {
+      socket.emit('send-signal', roomId, data);
+    });
+
+    myPeer.on('stream', stream => {
+      userVideo.srcObject = stream;
+    });
+  });
+
+  socket.on('receive-message', message => {
+    const msgElement = document.createElement('div');
+    msgElement.textContent = message;
+    chatBox.appendChild(msgElement);
+  });
+
+  sendButton.addEventListener('click', () => {
+    const message = chatInput.value;
+    socket.emit('send-message', roomId, message);
+    chatInput.value = '';
+    const msgElement = document.createElement('div');
+    msgElement.textContent = 'You: ' + message;
+    chatBox.appendChild(msgElement);
+  });
+
+  nextButton.addEventListener('click', () => {
+    location.reload();
+  });
 }
 
-sendButton.addEventListener('click', () => {
-    const message = messageInput.value;
-    socket.emit('chat message', message);
-    messageInput.value = '';
-});
-
-nextButton.addEventListener('click', () => {
-    if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-    }
-    remoteStream.getTracks().forEach(track => track.stop());
-    remoteStream = new MediaStream();
-    remoteVideo.srcObject = remoteStream;
-    chat.innerHTML = '';
-    loader.style.display = 'block';
-    socket.emit('next');
-});
-
-socket.on('chat message', (data) => {
-    const messageElement = document.createElement('div');
-    messageElement.textContent = `${data.sender}: ${data.message}`;
-    chat.appendChild(messageElement);
-    chat.scrollTop = chat.scrollHeight;
-});
-
-socket.on('waiting for partner', () => {
-    loader.style.display = 'block';
-});
-
-socket.on('partner found', () => {
-    loader.style.display = 'none';
-    const messageElement = document.createElement('div');
-    messageElement.textContent = 'Connected to a new partner.';
-    chat.appendChild(messageElement);
-    chat.scrollTop = chat.scrollHeight;
-
-    if (!peerConnection) createPeerConnection();
-    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-});
-
-socket.on('partner disconnected', () => {
-    const messageElement = document.createElement('div');
-    messageElement.textContent = 'Partner has disconnected.';
-    chat.appendChild(messageElement);
-    chat.scrollTop = chat.scrollHeight;
-
-    if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-    }
-    remoteStream.getTracks().forEach(track => track.stop());
-    remoteStream = new MediaStream();
-    remoteVideo.srcObject = remoteStream;
-    loader.style.display = 'block';
-    socket.emit('next');
-});
-
-socket.on('signal', async (data) => {
-    if (data.type === 'new-peer') {
-        if (!peerConnection) createPeerConnection();
-        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        socket.emit('signal', { type: 'offer', offer });
-    } else if (data.type === 'offer') {
-        if (!peerConnection) createPeerConnection();
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
-        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        socket.emit('signal', { type: 'answer', answer });
-    } else if (data.type === 'answer') {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-    } else if (data.type === 'ice-candidate') {
-        try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (error) {
-            console.error('Error adding received ice candidate', error);
-        }
-    }
-});
-
-function createPeerConnection() {
-    peerConnection = new RTCPeerConnection(config);
-
-    peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-            socket.emit('signal', { type: 'ice-candidate', candidate: event.candidate });
-        }
-    };
-
-    peerConnection.ontrack = (event) => {
-        remoteStream.addTrack(event.track);
-        remoteVideo.srcObject = remoteStream;
-    };
-}
-
-startVideo();
+const roomId = 'some-room-id';
+socket.emit('join-room', roomId, socket.id);
+init();

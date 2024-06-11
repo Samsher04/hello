@@ -1,60 +1,50 @@
-const express = require("express");
-const http = require("http");
-const socketIo = require("socket.io");
-const path = require("path");
+const express = require('express');
+const http = require('http');
+const path = require('path');
+const socketIo = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, 'public')));
 
-let waitingUser = null;
+const users = {};
 
-io.on("connection", (socket) => {
-  console.log("New user connected");
+io.on('connection', (socket) => {
+  console.log('New user connected');
 
-  socket.on("disconnect", () => {
-    console.log("User disconnected");
-    if (socket.partner) {
-      socket.partner.emit("partner disconnected");
-      socket.partner.partner = null;
+  socket.on('join-room', (roomId, userId) => {
+    if (!users[roomId]) users[roomId] = [];
+    if (users[roomId].length >= 2) {
+      socket.emit('room-full');
+      return;
     }
+    
+    users[roomId].push(userId);
+    socket.join(roomId);
+
+    socket.to(roomId).emit('user-connected', userId);
+    io.to(socket.id).emit('waiting-for-partner', users[roomId].length < 2);
+
+    socket.on('disconnect', () => {
+      users[roomId] = users[roomId].filter((id) => id !== userId);
+      socket.to(roomId).emit('user-disconnected', userId);
+      if (users[roomId].length === 0) {
+        delete users[roomId];
+      }
+    });
   });
 
-  socket.on("next", () => {
-    if (socket.partner) {
-      socket.partner.emit("partner disconnected");
-      socket.partner.partner = null;
-      socket.partner = null;
-    }
-    if (waitingUser) {
-      socket.partner = waitingUser;
-      waitingUser.partner = socket;
-      waitingUser.emit("partner found");
-      socket.emit("partner found");
-      waitingUser = null;
-    } else {
-      waitingUser = socket;
-      socket.emit("waiting for partner");
-    }
+  socket.on('send-message', (roomId, message) => {
+    socket.to(roomId).emit('receive-message', message);
   });
 
-  socket.on("chat message", (msg) => {
-    if (socket.partner) {
-      socket.partner.emit("chat message", { sender: "Stranger", message: msg });
-      socket.emit("chat message", { sender: "You", message: msg });
-    }
-  });
-
-  socket.on("signal", (data) => {
-    if (socket.partner) {
-      socket.partner.emit("signal", data);
-    }
+  socket.on('send-signal', (roomId, signal) => {
+    socket.to(roomId).emit('receive-signal', signal);
   });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+server.listen(3000, () => {
+  console.log('Server is running on port 3000');
 });
